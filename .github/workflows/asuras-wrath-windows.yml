@@ -1,0 +1,126 @@
+name: Temporary Asura's Wrath Windows build
+
+on:
+  push:
+    branches:
+      - asuras-wrath-windows-build
+    paths:
+      - '.github/workflows/asuras-wrath-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout Asura's Wrath recomp
+        uses: actions/checkout@v4
+        with:
+          repository: PauloUbirajara/asuras-wrath-recomp
+          ref: master
+          path: asura
+
+      - name: Checkout matching ReXGlue SDK
+        uses: actions/checkout@v4
+        with:
+          repository: rexglue/rexglue-sdk
+          ref: c94f5ebdcb3c9d1a460ca48e04f9758448f8d518
+          path: rexglue-sdk
+          submodules: recursive
+
+      - name: Install Windows build toolchain
+        shell: pwsh
+        run: |
+          choco install llvm cmake ninja -y
+          'C:\Program Files\LLVM\bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Show toolchain versions
+        shell: pwsh
+        run: |
+          cmake --version
+          ninja --version
+          clang --version
+          clang++ --version
+
+      - name: Build and install ReXGlue SDK
+        shell: pwsh
+        working-directory: rexglue-sdk
+        run: |
+          cmake --preset win-amd64 -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          cmake --build out/build/win-amd64 --target install --parallel 2
+
+      - name: Patch Linux-only linker flag and preserve checked-in codegen
+        shell: pwsh
+        working-directory: asura
+        run: |
+          $cmake = Get-Content CMakeLists.txt -Raw
+          $cmake = $cmake -replace '(?m)^target_link_options\(asura_wrath_recomp PRIVATE .*\r?\n', ''
+          Set-Content CMakeLists.txt $cmake -Encoding utf8
+
+          # The generated C++ is already checked into the repository. The normal
+          # target tries to regenerate it from extracted/default.xex, which is not
+          # present in CI (and should not be distributed). Supplying the generated
+          # stamp keeps this build entirely game-data-free.
+          New-Item -ItemType File -Force generated/default/codegen.build.stamp | Out-Null
+          (Get-Item generated/default/codegen.build.stamp).LastWriteTime = Get-Date
+
+      - name: Configure Asura's Wrath
+        shell: pwsh
+        working-directory: asura
+        run: |
+          cmake --preset win-amd64-release
+
+      - name: Build Asura's Wrath
+        shell: pwsh
+        working-directory: asura
+        run: |
+          cmake --build --preset win-amd64-release --parallel 2
+
+      - name: Package Windows build
+        shell: pwsh
+        run: |
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          New-Item -ItemType Directory -Force $dist | Out-Null
+
+          $exe = Get-ChildItem "$env:GITHUB_WORKSPACE\asura\out\build\win-amd64-release" -Recurse -Filter asura_wrath_recomp.exe | Select-Object -First 1
+          if (-not $exe) { throw 'asura_wrath_recomp.exe was not produced' }
+          Copy-Item $exe.FullName $dist
+
+          # Copy runtime DLLs produced/installed by ReXGlue. Flattening is safe
+          # here because identical dependency names are intentionally replaceable.
+          Get-ChildItem "$env:GITHUB_WORKSPACE\rexglue-sdk\out" -Recurse -Filter *.dll -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName $dist -Force
+          }
+
+          @"
+          Asura's Wrath Recompiled - experimental Windows build
+
+          Built from:
+            PauloUbirajara/asuras-wrath-recomp master
+            ReXGlue SDK c94f5ebdcb3c9d1a460ca48e04f9758448f8d518
+
+          This package contains NO game data.
+
+          To run it, extract your legally owned Xbox 360 Asura's Wrath ISO and
+          place the extracted game filesystem in a folder named "extracted"
+          beside asura_wrath_recomp.exe. The folder should contain default.xex.
+
+          Windows support is currently marked untested by the recomp project's
+          author, so crashes, missing graphics, or other incompatibilities are
+          possible.
+          "@ | Set-Content (Join-Path $dist 'README-WINDOWS.txt') -Encoding utf8
+
+          Write-Host 'Packaged files:'
+          Get-ChildItem $dist | Format-Table Name, Length
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: asuras-wrath-recomp-windows-x64
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 6
