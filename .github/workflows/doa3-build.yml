@@ -1,0 +1,58 @@
+name: DOA3 Windows x64 Build
+
+on:
+  push:
+    branches:
+      - doa3-build-20260918
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out DOA3 recomp source
+        uses: actions/checkout@v4
+        with:
+          repository: parkerallan/doa3-recomp
+          ref: 96c3ca9b679a886767065ff963e6bd3edbc734f9
+          path: doa3-recomp
+
+      - name: Configure x64 Release build
+        shell: pwsh
+        run: cmake -S doa3-recomp/doa3 -B doa3-recomp/doa3/build -A x64
+
+      - name: Build doa3.exe
+        shell: pwsh
+        run: cmake --build doa3-recomp/doa3/build --config Release --target doa3 --parallel
+
+      - name: Package build
+        shell: pwsh
+        run: |
+          $package = "doa3-windows-x64-96c3ca9"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item "doa3-recomp/doa3/build/release/doa3.exe" "$package/doa3.exe"
+          @"
+          Dead or Alive 3 static recompilation Windows build
+          Source: https://github.com/parkerallan/doa3-recomp
+          Commit: 96c3ca9b679a886767065ff963e6bd3edbc734f9
+          Configuration: Release
+          Architecture: x64
+          Toolchain: Visual Studio 2022 / MSVC on GitHub Actions windows-2022
+          
+          Game files are not included.
+          Per upstream README, extract your legally owned Dead or Alive 3 disc so that
+          doa3gamefiles/default.xbe exists next to the doa3 source/gamefiles layout expected by the project.
+          "@ | Set-Content -Encoding UTF8 "$package/BUILD_INFO.txt"
+          Compress-Archive -Path "$package/*" -DestinationPath "$package.zip" -Force
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: doa3-windows-x64-96c3ca9
+          path: doa3-windows-x64-96c3ca9.zip
+          if-no-files-found: error
+          retention-days: 7
