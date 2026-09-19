@@ -56,3 +56,5 @@ jobs:
           path: doa3-windows-x64-96c3ca9.zip
           if-no-files-found: error
           retention-days: 7
+
+# Trigger build after workflow registration
